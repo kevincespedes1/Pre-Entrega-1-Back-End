@@ -1,96 +1,93 @@
 import { Router } from 'express'
 
+import { uploader } from '../uploader.js'
+import { ProductController } from '../controllers/product.controller.mdb.js'
+
 const router = Router()
-const products = []
+const controller = new ProductController()
 
-function generateProductId() {
-    if (products.length === 0) {
-        return 1;
+router.get('/', async (req, res) => {
+    try{
+    const query = req.query.query ? JSON.parse(req.query.query) : {} //Lo convierto con un JSON.Parse para evitar problemas en la busqueda, REALIZARLA COMO JSON UNICAMENTE, por ejemplo: /api/products?query={"category":"Tables"}
+    let sort = null
+
+    if (req.query.sort) {
+        if (req.query.sort === 'asc' || req.query.sort === 'desc') {
+            sort = { price: req.query.sort }; // En caso de asc ordena ascendentemente y en caso de desc ordena descendentemente.
+        } else {
+            console.error('Invalid value for sort. The ordering is ignored.'); // Si sort no recibe asc o desc se ignora el ordenamiento.
+        }
     }
-    const lastProduct = products[products.length - 1];
-    return lastProduct.id + 1;
-}
+        const limit = req.query.limit // Uso la query limit para el limite de productos.
+        const page = req.query.page // Uso la query page para la pagina a la cual quiero ir.
+        const result = await controller.getProducts({ limit, page, sort, query }) // Obtengo resultados utilizando paginate.
 
-//ENDPOINT
-
-router.get('/', (req, res) => {
-    res.status(200).send({ data: products })
+        res.status(200).send({status: 'sucess', payload: result}) // En el result se devuelve "prevPage":null,"nextPage":null en vez de prevLink: Link directo a la página previa (null si hasPrevPage=false) nextLink Link directo a la página siguiente (null si hasNextPage=false). Me lo devuelve con distinto nombre pero ambos funcionan de la misma manera (con null)
+} catch (error) {
+        // Agregue un catch ya que si no enviamos un JSON como query se caia la pagina, asi que en el catch si no se consigue un JSON se envia el mensaje de error.
+        console.error('Error parsing query:', error);
+        res.status(400).send({ status: 'error', message: 'Invalid JSON in query parameter.' });
+    }
 })
 
-router.get('/:pid', (req, res) => {
-    const productId = parseInt(req.params.pid);
-    const product = products.find((product) => product.id === productId);
+router.get('/:pid', async (req, res) => {
+    const productId = req.params.pid // Obtengo el id enviado por params.
 
-    if (!product) {
-        return res.status(400).send({ error: 'Producto no encontrado' });
+    if (!/^[a-fA-F0-9]{24}$/.test(productId)) {
+        return res.status(400).send({ status: 'Error', message: 'Invalid product ID' }); // Valido ese id obtenido.
     }
 
-    res.status(200).send({ product });
+    const product = await controller.getProduct(productId);
+        if (product) {
+            res.status(200).send({ status: 'OK', data: product }); 
+        } else {
+            res.status(400).send({ status: 'Error', message: 'Product not found' });
+        }
 })
 
-router.post('/', (req, res) => {
-    const {
-        title,
-        description,
-        code,
-        price,
-        status,
-        stock,
-        category,
-        thumbnails,
-    } = req.body
+router.post('/', uploader.single('thumbnail'), async (req, res) => {
+    if (!req.file) return res.status(400).send({ status: 'FIL', data: 'Could not upload file' })
 
-    if (!title || !description || !code || !price || !status || !stock || !category || !thumbnails) {
-        return res.status(400).send({ error: 'Todos los campos son obligatorios' });
+    const { title, description, price, code, stock, status, category } = req.body
+    if (!title || !description || !price || !code || !stock) {
+        return res.status(400).send({ error: 'All fields are required' })
     }
 
-    if (!Array.isArray(thumbnails) || !thumbnails.every((item) => typeof item === 'string')) {
-        return res.status(400).send({ error: 'Error, debe ser un campo de cadenas' });
+    const existingProduct = await controller.getProductByCode(parseInt(code));
+    if (existingProduct) {
+        return res.status(400).send({ error: 'Product with the same code already exists' });
     }
-
-    const id = generateProductId()
 
     const newProduct = {
-        id,
         title,
         description,
-        code,
         price,
+        thumbnail: req.file.filename,
         status,
-        stock,
         category,
-        thumbnails,
+        code,
+        stock
     }
-    products.push(newProduct)
+
+    const result = await controller.addProduct(newProduct)
+    res.status(200).send({ status: 'OK', data: result })
 })
 
-router.put('/:pid', (req, res) => {
-    const productId = parseInt(req.params.pid);
-    const productIndex = products.findIndex((product) => product.id === productId);
+router.put('/:pid', async (req, res) => {
+    const id = req.params.pid;
+    const newContent = req.body
 
-    if (productIndex === -1) {
-        return res.status(400).send({ error: 'Producto no encontrado' });
-    }
+    const updatedProduct = await controller.updateProduct(id, newContent)
 
-    const updatedProduct = req.body;
-    updatedProduct.id = productId;
-
-    products[productIndex] = updatedProduct;
-
-    res.status(200).send({updatedProduct});
+    res.status(200).send({ status: 'Updated', data: updatedProduct })
 })
 
-router.delete('/:pid', (req, res) => {
-    const productId = parseInt(req.params.pid);
-    const productIndex = products.findIndex((product) => product.id === productId);
+router.delete('/:pid', async (req, res) => {
+    const id = req.params.pid;
 
-    if (productIndex === -1) {
-    return res.status(400).send({ error: 'Producto no encontrado' });
-    }
+    const deletedProduct = await controller.deleteProduct(id)
 
-    products.splice(productIndex, 1);
-    res.status(200).send({ message: 'Producto eliminado con exito' });
+    res.status(200).send({ status: 'Deleted', data: deletedProduct })
 })
 
 export default router
-export {products}
